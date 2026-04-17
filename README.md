@@ -1,137 +1,172 @@
-#File Classification System
-file-classifier
-CLI tool that scans, classifies, and reports on file systems by type, size, and structure.
+#Log Analysis System
+log-analysis-system
+CLI tool for parsing multi-format log files using regex, detecting anomalies and generating statistical reports.
+
+import re
+from collections import defaultdict, Counter
+from dataclasses import dataclass
+from typing import List, Dict
+
 
 # =========================================
 # CONFIGURATION
 # =========================================
 
-SMALL_FILE_THRESHOLD = 50
-DEEP_ANALYSIS_LIMIT = 200
+LOG_PATTERN = re.compile(
+    r"(?P<date>\d{4}-\d{2}-\d{2})\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"\[(?P<level>INFO|WARNING|ERROR|DEBUG)\]\s+"
+    r"(?P<message>.*)"
+)
 
 
 # =========================================
-# INPUT LAYER
+# DATA MODEL
 # =========================================
 
-def get_number_of_files():
-    while True:
-        try:
-            n = int(input("أدخل عدد الملفات: "))
-            if n <= 0:
-                raise ValueError("العدد يجب أن يكون أكبر من صفر.")
-            return n
-        except ValueError as e:
-            print(f"خطأ: {e}")
-
-
-def get_file_data(index):
-    while True:
-        try:
-            print(f"\n--- الملف رقم {index+1} ---")
-            name = input("اسم الملف: ").strip()
-            if not name:
-                raise ValueError("الاسم لا يمكن أن يكون فارغًا.")
-
-            size = int(input("الحجم: "))
-            if size < 0:
-                raise ValueError("الحجم لا يمكن أن يكون سالبًا.")
-
-            file_type = int(input("النوع (1=نص، 2=بايناري): "))
-            if file_type not in (1, 2):
-                raise ValueError("النوع غير صالح.")
-
-            return {
-                "name": name,
-                "size": size,
-                "type": "Text" if file_type == 1 else "Binary",
-                "status": "Pending",
-                "error": None
-            }
-
-        except ValueError as e:
-            print(f"خطأ: {e}")
+@dataclass
+class LogEntry:
+    timestamp: str
+    level: str
+    message: str
 
 
 # =========================================
-# PROCESSING LAYER
+# PARSER LAYER
 # =========================================
 
-def process_file(file):
-    size = file["size"]
+def parse_log_line(line: str):
+    match = LOG_PATTERN.match(line.strip())
+    if not match:
+        return None
 
-    if size <= SMALL_FILE_THRESHOLD:
-        file["status"] = "Success"
-        return
+    return LogEntry(
+        timestamp=f"{match.group('date')} {match.group('time')}",
+        level=match.group("level"),
+        message=match.group("message")
+    )
 
-    try:
-        if size > DEEP_ANALYSIS_LIMIT:
-            raise RuntimeError("فشل في المعالجة العميقة (حجم كبير جداً).")
 
-        file["status"] = "Success"
+def load_logs(file_path: str) -> List[LogEntry]:
+    entries = []
 
-    except Exception as e:
-        file["status"] = "Failed"
-        file["error"] = str(e)
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            entry = parse_log_line(line)
+            if entry:
+                entries.append(entry)
+
+    return entries
 
 
 # =========================================
-# STATISTICS LAYER
+# ANALYSIS LAYER
 # =========================================
 
-def calculate_statistics(files):
-    total_size = sum(f["size"] for f in files)
+def compute_stats(entries: List[LogEntry]) -> Dict:
+    stats = Counter(entry.level for entry in entries)
+
+    total = len(entries)
 
     return {
-        "total_files": len(files),
-        "small_files": sum(1 for f in files if f["size"] <= SMALL_FILE_THRESHOLD),
-        "large_files": sum(1 for f in files if f["size"] > SMALL_FILE_THRESHOLD),
-        "success_files": sum(1 for f in files if f["status"] == "Success"),
-        "failed_files": sum(1 for f in files if f["status"] == "Failed"),
-        "text_files": sum(1 for f in files if f["type"] == "Text"),
-        "binary_files": sum(1 for f in files if f["type"] == "Binary"),
-        "max_size": max(f["size"] for f in files),
-        "min_size": min(f["size"] for f in files),
-        "average_size": total_size / len(files)
+        "total_logs": total,
+        "info": stats.get("INFO", 0),
+        "warning": stats.get("WARNING", 0),
+        "error": stats.get("ERROR", 0),
+        "debug": stats.get("DEBUG", 0),
     }
+
+
+# =========================================
+# PATTERN DETECTION ENGINE
+# =========================================
+
+def detect_error_burst(entries: List[LogEntry], window_size=5):
+    """
+    Detect consecutive error spikes.
+    """
+    bursts = []
+    window = []
+
+    for i, entry in enumerate(entries):
+        window.append(entry.level)
+
+        if len(window) > window_size:
+            window.pop(0)
+
+        if window.count("ERROR") >= 3:
+            bursts.append(i)
+
+    return bursts
+
+
+def detect_most_common_errors(entries: List[LogEntry]):
+    errors = [e.message for e in entries if e.level == "ERROR"]
+    return Counter(errors).most_common(3)
+
+
+def detect_suspicious_patterns(entries: List[LogEntry]):
+    """
+    Simple heuristic security detection:
+    - repeated failures
+    - frequent errors in short span
+    """
+
+    patterns = {
+        "error_bursts": detect_error_burst(entries),
+        "top_errors": detect_most_common_errors(entries),
+    }
+
+    return patterns
 
 
 # =========================================
 # REPORT LAYER
 # =========================================
 
-def generate_report(files, stats):
-    print("\n=========== التقرير النهائي ===========")
-    for key, value in stats.items():
-        print(f"{key}: {value}")
+def generate_report(entries: List[LogEntry]):
+    stats = compute_stats(entries)
+    patterns = detect_suspicious_patterns(entries)
 
-    print("\n--- الملفات الفاشلة ---")
-    failed = [f for f in files if f["status"] == "Failed"]
+    report = {
+        "statistics": stats,
+        "patterns": patterns
+    }
 
-    if not failed:
-        print("لا توجد ملفات فاشلة.")
-    else:
-        for f in failed:
-            print(f"{f['name']} -> {f['error']}")
+    return report
+
+
+def print_report(report: Dict):
+    print("\n========== LOG ANALYSIS REPORT ==========\n")
+
+    print("📊 STATISTICS")
+    for k, v in report["statistics"].items():
+        print(f"{k}: {v}")
+
+    print("\n🧠 PATTERN DETECTION")
+
+    print("\n- Error bursts detected at indexes:")
+    print(report["patterns"]["error_bursts"])
+
+    print("\n- Most common errors:")
+    for msg, count in report["patterns"]["top_errors"]:
+        print(f"{msg} -> {count} times")
 
 
 # =========================================
-# MAIN ENTRY POINT
+# MAIN PIPELINE
 # =========================================
 
-def main():
-    files = []
-    n = get_number_of_files()
+def main(file_path: str):
+    entries = load_logs(file_path)
 
-    for i in range(n):
-        files.append(get_file_data(i))
+    if not entries:
+        print("No valid logs found")
+        return
 
-    for f in files:
-        process_file(f)
-
-    stats = calculate_statistics(files)
-    generate_report(files, stats)
+    report = generate_report(entries)
+    print_report(report)
 
 
 if __name__ == "__main__":
-    main()
+    main("logs.txt")
